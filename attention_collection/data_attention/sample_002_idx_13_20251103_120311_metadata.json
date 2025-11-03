@@ -1,0 +1,16 @@
+{
+  "total_batches": 1,
+  "num_layers": 1,
+  "num_heads": 2,
+  "collection_time": "2025-11-03T12:03:12.530514",
+  "data_files": [
+    "./data_attention/sample_002_idx_13_20251103_120311_layer_0.txt"
+  ],
+  "model_config": {
+    "input_dim": "unknown",
+    "embed_dim": 64,
+    "num_heads": 2,
+    "num_layers": 1
+  },
+  "output_mode": "complete_no_truncation"
+}

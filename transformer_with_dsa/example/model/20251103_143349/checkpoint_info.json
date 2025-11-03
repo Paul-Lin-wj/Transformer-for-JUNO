@@ -1,0 +1,51 @@
+{
+  "latest_epoch": 99,
+  "latest_checkpoint": "checkpoint_epoch_99.pth",
+  "latest_loss": 0.6046149134635925,
+  "latest_metrics": {
+    "val_loss": 0.6046149134635925,
+    "train_loss": 0.782821774482727
+  },
+  "checkpoints": [
+    {
+      "epoch": 49,
+      "filename": "checkpoint_epoch_49.pth",
+      "loss": 0.611883282661438,
+      "metrics": {
+        "val_loss": 0.611883282661438,
+        "train_loss": 0.8000904321670532
+      },
+      "timestamp": "2025-11-03T14:34:11.110211"
+    },
+    {
+      "epoch": 49,
+      "filename": "checkpoint_epoch_49.pth",
+      "loss": 0.6078693866729736,
+      "metrics": {
+        "val_loss": 0.6078693866729736,
+        "train_loss": 0.7933068871498108
+      },
+      "timestamp": "2025-11-03T14:34:11.519947"
+    },
+    {
+      "epoch": 99,
+      "filename": "checkpoint_epoch_99.pth",
+      "loss": 0.60071861743927,
+      "metrics": {
+        "val_loss": 0.60071861743927,
+        "train_loss": 0.7687112092971802
+      },
+      "timestamp": "2025-11-03T14:34:31.744211"
+    },
+    {
+      "epoch": 99,
+      "filename": "checkpoint_epoch_99.pth",
+      "loss": 0.6046149134635925,
+      "metrics": {
+        "val_loss": 0.6046149134635925,
+        "train_loss": 0.782821774482727
+      },
+      "timestamp": "2025-11-03T14:34:32.899283"
+    }
+  ]
+}

@@ -1,0 +1,41 @@
+{
+  "latest_epoch": 149,
+  "latest_checkpoint": "checkpoint_epoch_149.pth",
+  "latest_loss": 0.6018558740615845,
+  "latest_metrics": {
+    "val_loss": 0.6018558740615845,
+    "train_loss": 0.780457079410553
+  },
+  "checkpoints": [
+    {
+      "epoch": 49,
+      "filename": "checkpoint_epoch_49.pth",
+      "loss": 0.608940064907074,
+      "metrics": {
+        "val_loss": 0.608940064907074,
+        "train_loss": 0.7879070043563843
+      },
+      "timestamp": "2025-11-03T14:31:46.655311"
+    },
+    {
+      "epoch": 99,
+      "filename": "checkpoint_epoch_99.pth",
+      "loss": 0.6001151204109192,
+      "metrics": {
+        "val_loss": 0.6001151204109192,
+        "train_loss": 0.7589671611785889
+      },
+      "timestamp": "2025-11-03T14:32:06.874915"
+    },
+    {
+      "epoch": 149,
+      "filename": "checkpoint_epoch_149.pth",
+      "loss": 0.6018558740615845,
+      "metrics": {
+        "val_loss": 0.6018558740615845,
+        "train_loss": 0.780457079410553
+      },
+      "timestamp": "2025-11-03T14:32:27.065975"
+    }
+  ]
+}

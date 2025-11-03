@@ -1,0 +1,21 @@
+{
+  "latest_epoch": 49,
+  "latest_checkpoint": "checkpoint_epoch_49.pth",
+  "latest_loss": 0.6210581660270691,
+  "latest_metrics": {
+    "val_loss": 0.6210581660270691,
+    "train_loss": 0.7762928605079651
+  },
+  "checkpoints": [
+    {
+      "epoch": 49,
+      "filename": "checkpoint_epoch_49.pth",
+      "loss": 0.6210581660270691,
+      "metrics": {
+        "val_loss": 0.6210581660270691,
+        "train_loss": 0.7762928605079651
+      },
+      "timestamp": "2025-11-03T14:05:43.511675"
+    }
+  ]
+}
