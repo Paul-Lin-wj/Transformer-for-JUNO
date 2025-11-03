@@ -53,6 +53,7 @@ class TransformerDataset(Dataset):
             else:
                 # 滑动窗口创建序列
                 self.data = self._create_sequences(self.data, seq_len)
+        # 如果数据已经是3D的（N, seq_len, features），保持不变
 
         # 数据归一化
         if normalize:
@@ -172,11 +173,54 @@ class DataLoaderWithDSA:
 
         # 加载数据
         self.data, self.targets = self._load_dataset()
+        self.logger.info(f"Debug: After _load_dataset - data shape: {self.data.shape}, targets shape: {self.targets.shape}")
 
-        # 分割数据集
-        self.train_data, self.val_data, self.train_targets, self.val_targets = \
-            train_test_split(self.data, self.targets, train_size=train_ratio,
-                           random_state=random_seed)
+        # 对于序列数据，创建滑动窗口样本
+        if len(self.data.shape) == 3:
+            # 每个事件生成多个样本（滑动窗口）
+            all_sequences = []
+            all_targets = []
+
+            seq_len_input = self.seq_len if self.seq_len is not None else 200  # 默认窗口长度
+
+            for event_idx in range(self.data.shape[0]):
+                sequence = self.data[event_idx]  # [seq_len, features]
+                target = self.targets[event_idx]  # [target_dim]
+
+                # 创建滑动窗口
+                # 检查序列长度
+                self.logger.info(f"Debug: Processing event {event_idx}, sequence length: {sequence.shape[0]}, seq_len_input: {seq_len_input}")
+
+                if sequence.shape[0] < seq_len_input:
+                    # 序列太短，跳过或使用padding
+                    self.logger.warning(f"Sequence too short: {sequence.shape[0]} < {seq_len_input}")
+                    # 使用padding
+                    padding = np.zeros((seq_len_input - sequence.shape[0], sequence.shape[1]))
+                    padded_sequence = np.vstack([sequence, padding])
+                    all_sequences.append(padded_sequence)
+                    all_targets.append(target)
+                else:
+                    for start_idx in range(0, sequence.shape[0] - seq_len_input + 1, seq_len_input // 4):
+                        end_idx = start_idx + seq_len_input
+                        seq_window = sequence[start_idx:end_idx]
+                        all_sequences.append(seq_window)
+                        all_targets.append(target)
+
+            # 转换为numpy数组
+            all_sequences = np.array(all_sequences)
+            all_targets = np.array(all_targets)
+
+            self.logger.info(f"Created {len(all_sequences)} sequences from {self.data.shape[0]} events")
+
+            # 分割数据集
+            self.train_data, self.val_data, self.train_targets, self.val_targets = \
+                train_test_split(all_sequences, all_targets, train_size=train_ratio,
+                               random_state=random_seed)
+        else:
+            # 对于2D数据，直接分割
+            self.train_data, self.val_data, self.train_targets, self.val_targets = \
+                train_test_split(self.data, self.targets, train_size=train_ratio,
+                               random_state=random_seed)
 
         # 创建数据集
         self.train_dataset = TransformerDataset(
@@ -230,22 +274,39 @@ class DataLoaderWithDSA:
             elif file_ext in ['.pt', '.pth']:
                 loaded_data = torch.load(self.dataset_path, map_location='cpu')
                 if isinstance(loaded_data, dict):
-                    # 处理字典格式
-                    data = loaded_data.get('data', loaded_data.get('x', None))
-                    targets = loaded_data.get('targets', loaded_data.get('y', None))
+                    # 处理字典格式 - 首先尝试原始transformer的keys
+                    data = loaded_data.get('x_data', loaded_data.get('data', loaded_data.get('x', None)))
+                    targets = loaded_data.get('y_data', loaded_data.get('targets', loaded_data.get('y', None)))
 
                     # 如果data或targets是None，尝试其他key
                     if data is None:
                         for key in loaded_data:
                             if isinstance(loaded_data[key], torch.Tensor) and loaded_data[key].numel() > 0:
-                                data = loaded_data[key]
-                                break
+                                # 优先选择3D张量作为数据（序列数据）
+                                if len(loaded_data[key].shape) == 3 and loaded_data[key].shape[-1] <= self.input_dim * 10:
+                                    data = loaded_data[key]
+                                    break
+                        # 如果还是None，选择最大的张量
+                        if data is None:
+                            max_tensor = None
+                            max_size = 0
+                            for key in loaded_data:
+                                if isinstance(loaded_data[key], torch.Tensor) and loaded_data[key].numel() > max_size:
+                                    max_size = loaded_data[key].numel()
+                                    max_tensor = loaded_data[key]
+                            data = max_tensor
 
                     if targets is None:
                         for key in loaded_data:
-                            if key not in ['data', 'x'] and isinstance(loaded_data[key], torch.Tensor) and loaded_data[key].numel() > 0:
-                                targets = loaded_data[key]
-                                break
+                            if isinstance(loaded_data[key], torch.Tensor) and loaded_data[key].numel() > 0:
+                                # 优先选择2D张量作为目标
+                                if len(loaded_data[key].shape) == 2 and loaded_data[key].shape[-1] >= self.target_dim:
+                                    targets = loaded_data[key]
+                                    break
+                                # 或者选择1D或2D张量
+                                elif len(loaded_data[key].shape) <= 2 and loaded_data[key].shape[-1] >= self.target_dim:
+                                    targets = loaded_data[key]
+                                    break
 
                     # 转换为numpy
                     if isinstance(data, torch.Tensor):
@@ -253,9 +314,14 @@ class DataLoaderWithDSA:
                     if isinstance(targets, torch.Tensor):
                         targets = targets.numpy()
 
+                    # Debug output
+                    self.logger.info(f"Debug: After loading - data shape: {data.shape if isinstance(data, np.ndarray) else type(data)}")
+                    self.logger.info(f"Debug: After loading - targets shape: {targets.shape if isinstance(targets, np.ndarray) else type(targets)}")
+
                     # 如果还是None，使用数据的最后一部分作为targets
                     if targets is None and isinstance(data, np.ndarray):
-                        targets = data[:, :self.target_dim]
+                        # 对于轨迹数据，targets通常是最后6个值（入射点3个+出射点3个）
+                        targets = data[:, -self.target_dim:] if data.shape[1] >= self.target_dim else data[:, :self.target_dim]
                 else:
                     data = loaded_data.numpy() if isinstance(loaded_data, torch.Tensor) else loaded_data
                     targets = data[:, :self.target_dim]
@@ -264,8 +330,7 @@ class DataLoaderWithDSA:
                     data = data.reshape(-1, 1)
                 if len(targets.shape) == 1:
                     targets = targets.reshape(-1, 1)
-                data = data[:, :self.input_dim] if data.shape[1] >= self.input_dim else \
-                       np.pad(data, ((0, 0), (0, max(0, self.input_dim - data.shape[1]))))
+                # Don't truncate here - this should be inside the shape-specific blocks above
 
             elif file_ext == '.pkl':
                 with open(self.dataset_path, 'rb') as f:
@@ -294,17 +359,38 @@ class DataLoaderWithDSA:
                 raise ValueError(f"Unsupported file format: {file_ext}. Supported formats: .npy, .pkl, .csv, .json, .pt, .pth")
 
             # 确保数据形状正确
+            self.logger.info(f"Debug: Initial data shape: {data.shape}, targets shape: {targets.shape}")
+
             if len(data.shape) == 1:
                 data = data.reshape(-1, 1)
             if len(targets.shape) == 1:
                 targets = targets.reshape(-1, 1)
 
-            # 截断或填充到指定维度
-            if data.shape[1] > self.input_dim:
-                data = data[:, :self.input_dim]
-            elif data.shape[1] < self.input_dim:
-                padding = np.zeros((data.shape[0], self.input_dim - data.shape[1]))
-                data = np.concatenate([data, padding], axis=1)
+            # 对于3D数据 (N, seq_len, features)，确保特征维度正确
+            if len(data.shape) == 3:
+                # data已经是序列格式 [N, seq_len, features]
+                self.logger.info(f"Debug: Processing 3D data with shape: {data.shape}")
+                # 检查特征维度
+                if data.shape[2] > self.input_dim:
+                    data = data[:, :, :self.input_dim]
+                elif data.shape[2] < self.input_dim:
+                    # 填充特征维度
+                    padding = np.zeros((data.shape[0], data.shape[1], self.input_dim - data.shape[2]))
+                    data = np.concatenate([data, padding], axis=2)
+            elif len(data.shape) == 2:
+                # 如果2D数据的第二个维度是input_dim，将其作为特征
+                self.logger.info(f"Debug: 2D data shape before processing: {data.shape}")
+                if data.shape[1] >= self.input_dim:
+                    data = data[:, :self.input_dim]
+                else:
+                    # 填充到input_dim
+                    padding = np.zeros((data.shape[0], self.input_dim - data.shape[1]))
+                    data = np.concatenate([data, padding], axis=1)
+
+            # 处理targets维度
+            if len(targets.shape) == 3:
+                # 对于3D targets，压缩序列维度
+                targets = targets[:, 0, :]  # 取第一个时间步
 
             if targets.shape[1] > self.target_dim:
                 targets = targets[:, :self.target_dim]
@@ -312,13 +398,28 @@ class DataLoaderWithDSA:
                 padding = np.zeros((targets.shape[0], self.target_dim - targets.shape[1]))
                 targets = np.concatenate([targets, padding], axis=1)
 
+            # 检查数据有效性
+            if np.isnan(data).any():
+                self.logger.warning(f"Data contains NaN values after loading. Shape: {data.shape}")
+                # 替换NaN值为0
+                data = np.nan_to_num(data, nan=0.0, posinf=1e6, neginf=-1e6)
+            if np.isnan(targets).any():
+                self.logger.warning(f"Targets contain NaN values after loading. Shape: {targets.shape}")
+                # 替换NaN值为0
+                targets = np.nan_to_num(targets, nan=0.0, posinf=1e6, neginf=-1e6)
+
+            self.logger.info(f"Debug: Before return - data shape: {data.shape}, targets shape: {targets.shape}")
             return data, targets
 
         except Exception as e:
             self.logger.error(f"Error loading dataset: {e}")
+            import traceback
+            self.logger.error(f"Traceback: {traceback.format_exc()}")
             # 创建合成数据作为后备
             self.logger.warning("Creating synthetic dataset as fallback")
-            return self._create_synthetic_data()
+            synthetic_data, synthetic_targets = self._create_synthetic_data()
+            self.logger.error(f"Synthetic data shape: {synthetic_data.shape}, targets shape: {synthetic_targets.shape}")
+            return synthetic_data, synthetic_targets
 
     def _create_synthetic_data(self, num_samples=1000):
         """创建合成数据集作为后备"""

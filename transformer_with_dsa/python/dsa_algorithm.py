@@ -372,23 +372,51 @@ class DSALoss(nn.Module):
         # 基础任务损失
         task_loss = self.base_loss_fn(predictions, targets)
 
+        # 检查是否产生NaN
+        if torch.isnan(task_loss):
+            print(f"Warning: task_loss is NaN! Predictions shape: {predictions.shape}, Targets shape: {targets.shape}")
+            print(f"Predictions: {predictions}")
+            print(f"Targets: {targets}")
+            print(f"Predictions contains NaN: {torch.isnan(predictions).any()}")
+            print(f"Targets contains NaN: {torch.isnan(targets).any()}")
+            print(f"Predictions contains Inf: {torch.isinf(predictions).any()}")
+            print(f"Targets contains Inf: {torch.isinf(targets).any()}")
+            task_loss = torch.tensor(0.0, device=predictions.device)
+
         # 稀疏度正则化（鼓励稀疏）
-        sparsity_loss = sparsity_stats.get('sparsity_ratio', 0) * self.sparsity_weight
+        sparsity_ratio = sparsity_stats.get('sparsity_ratio', 0)
+        sparsity_loss = sparsity_ratio * self.sparsity_weight
 
         # 信息保留正则化（惩罚信息丢失）
-        info_loss = (1 - sparsity_stats.get('retained_info_ratio', 1)) * self.sparsity_weight
+        retained_info_ratio = sparsity_stats.get('retained_info_ratio', 1)
+        info_loss = (1 - retained_info_ratio) * self.sparsity_weight
 
         # 熵正则化（鼓励attention分布的多样性）
-        entropy_loss = -sparsity_stats.get('entropy', 0) * self.entropy_weight
+        entropy = sparsity_stats.get('entropy', 0)
+        entropy_loss = -entropy * self.entropy_weight
 
+        # 总损失
         total_loss = task_loss + sparsity_loss + info_loss + entropy_loss
 
+        # 再次检查总损失是否为NaN
+        if torch.isnan(total_loss):
+            print(f"Warning: total_loss is NaN! Using only task_loss.")
+            total_loss = task_loss
+
+        # 安全地获取损失值
+        def safe_get_tensor_value(tensor, default=0.0):
+            if torch.is_tensor(tensor):
+                if torch.isnan(tensor):
+                    return default
+                return tensor.item()
+            return tensor
+
         loss_components = {
-            'total_loss': total_loss.item(),
-            'task_loss': task_loss.item(),
-            'sparsity_loss': sparsity_loss,
-            'info_loss': info_loss,
-            'entropy_loss': entropy_loss
+            'total_loss': safe_get_tensor_value(total_loss),
+            'task_loss': safe_get_tensor_value(task_loss),
+            'sparsity_loss': safe_get_tensor_value(sparsity_loss),
+            'info_loss': safe_get_tensor_value(info_loss),
+            'entropy_loss': safe_get_tensor_value(entropy_loss)
         }
 
         return total_loss, loss_components

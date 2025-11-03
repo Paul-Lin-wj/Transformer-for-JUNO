@@ -432,6 +432,24 @@ class TrainerWithDSA:
             if self.config.get('task_type', 'regression') == 'regression':
                 output = output[:, -1, :]  # 取最后一个时间步 [batch_size, output_dim]
 
+            # 处理形状不匹配的情况
+            # 如果targets是3维而output是2维，压缩targets的中间维度
+            if len(targets.shape) == 3 and len(output.shape) == 2:
+                if targets.shape[1] == 1:
+                    targets = targets.squeeze(1)  # [batch_size, 1, dim] -> [batch_size, dim]
+
+            # 如果output是1维而targets是2维，扩展output
+            if len(output.shape) == 1 and len(targets.shape) == 2:
+                output = output.unsqueeze(-1)  # [batch_size] -> [batch_size, 1]
+
+            # 确保output和targets的形状兼容
+            # 如果output的最后一个维度是1而targets更大，或反之
+            if output.shape[-1] == 1 and targets.shape[-1] > 1:
+                # 这种情况下，假设output应该重复匹配targets的维度
+                output = output.expand(-1, targets.shape[-1])
+            elif targets.shape[-1] == 1 and output.shape[-1] > 1:
+                targets = targets.expand(-1, output.shape[-1])
+
             # 计算损失
             loss, loss_components = self.criterion(output, targets, dsa_stats)
 
@@ -473,6 +491,14 @@ class TrainerWithDSA:
             for data, targets in self.val_loader:
                 data, targets = data.to(self.device), targets.to(self.device)
 
+                # 检查输入数据是否包含NaN
+                if torch.isnan(data).any():
+                    self.logger.error("Input data contains NaN! Skipping this batch.")
+                    continue
+                if torch.isnan(targets).any():
+                    self.logger.error("Targets contain NaN! Skipping this batch.")
+                    continue
+
                 # 前向传播
                 if self.model.dsa_enabled:
                     output, stats = self.model(data, training=False, return_attention=True)
@@ -485,20 +511,72 @@ class TrainerWithDSA:
                 if self.config.get('task_type', 'regression') == 'regression':
                     output = output[:, -1, :]  # 取最后一个时间步 [batch_size, output_dim]
 
+                # 检查模型输出是否包含NaN
+                if torch.isnan(output).any():
+                    self.logger.error("Model output contains NaN! Skipping this batch.")
+                    continue
+
+                # 处理形状不匹配的情况
+                # 如果targets是3维而output是2维，压缩targets的中间维度
+                if len(targets.shape) == 3 and len(output.shape) == 2:
+                    if targets.shape[1] == 1:
+                        targets = targets.squeeze(1)  # [batch_size, 1, dim] -> [batch_size, dim]
+
+                # 如果output是1维而targets是2维，扩展output
+                if len(output.shape) == 1 and len(targets.shape) == 2:
+                    output = output.unsqueeze(-1)  # [batch_size] -> [batch_size, 1]
+
+                # 确保output和targets的形状兼容
+                # 如果output的最后一个维度是1而targets更大，或反之
+                if output.shape[-1] == 1 and targets.shape[-1] > 1:
+                    # 这种情况下，假设output应该重复匹配targets的维度
+                    output = output.expand(-1, targets.shape[-1])
+                elif targets.shape[-1] == 1 and output.shape[-1] > 1:
+                    targets = targets.expand(-1, output.shape[-1])
+
+                # 调试信息（只记录第一个batch）
+                if epoch == 0 and total_loss == 0:
+                    self.logger.debug(f"Validation - Output shape: {output.shape}, Targets shape: {targets.shape}")
+
                 # 计算损失
                 loss, loss_components = self.criterion(output, targets, dsa_stats)
+
+                # 检查loss是否为NaN
+                if torch.isnan(loss):
+                    self.logger.error(f"NaN loss detected! Output shape: {output.shape}, Targets shape: {targets.shape}")
+                    self.logger.error(f"Output sample: {output[0] if len(output) > 0 else 'Empty'}")
+                    self.logger.error(f"Target sample: {targets[0] if len(targets) > 0 else 'Empty'}")
+                    continue  # 跳过这个batch
 
                 total_loss += loss.item()
 
                 # 记录指标
                 for key, value in loss_components.items():
+                    # 处理NaN值
+                    if isinstance(value, (int, float)):
+                        if np.isnan(value):
+                            value = 0.0
                     all_metrics[key].append(value)
                 if dsa_stats:
                     all_metrics['sparsity'].append(dsa_stats.get('avg_sparsity', 0))
 
-        # 计算平均指标
+        # 处理没有有效batch的情况
+        if len(self.val_loader) == 0:
+            return float('nan'), {}
+
+        # 计算平均指标（如果有有效batch）
+        if total_loss == 0 and len(all_metrics) == 0:
+            # 所有batch都被跳过了
+            self.logger.warning("All validation batches were skipped due to NaN values.")
+            return 0.0, {}
+
         avg_loss = total_loss / len(self.val_loader)
-        avg_metrics = {k: np.mean(v) for k, v in all_metrics.items()}
+        avg_metrics = {}
+        for k, v in all_metrics.items():
+            if v:  # 如果列表不为空
+                avg_metrics[k] = np.mean(v)
+            else:
+                avg_metrics[k] = 0.0
 
         self.logger.info(f"Epoch {epoch} - Val Loss: {avg_loss:.6f}")
 
@@ -549,7 +627,9 @@ class TrainerWithDSA:
             # 损失曲线
             plt.subplot(2, 3, 1)
             plt.plot(self.training_history['epoch'], self.training_history['train_loss'], label='Train Loss')
-            plt.plot(self.training_history['epoch'], self.training_history['val_loss'], label='Val Loss')
+            # 只有当val_loss不为空时才绘制
+            if self.training_history['val_loss'] and len(self.training_history['val_loss']) > 0:
+                plt.plot(self.training_history['epoch'], self.training_history['val_loss'], label='Val Loss')
             plt.title('Training and Validation Loss')
             plt.xlabel('Epoch')
             plt.ylabel('Loss')

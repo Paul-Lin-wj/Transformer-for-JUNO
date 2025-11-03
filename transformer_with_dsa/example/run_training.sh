@@ -21,7 +21,7 @@ EMBED_DIM=128                  # 嵌入维度
 NUM_HEADS=8                    # 注意力头数
 NUM_LAYERS=4                   # Transformer层数
 FF_DIM=512                     # 前馈网络隐藏层维度
-OUTPUT_DIM=1                   # 输出维度
+OUTPUT_DIM=6                   # 输出维度（入射点3个+出射点3个坐标）
 DROPOUT=0.1                    # Dropout率
 
 # DSA配置

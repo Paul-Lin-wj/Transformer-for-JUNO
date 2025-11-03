@@ -70,13 +70,16 @@ log() {
 
 
 echo "Start Model Training"
+
+#    --pklfile_train_path "../sample/dataset" \
+
 # CUDA_VISIBLE_DEVICES=0,1 accelerate launch --num_processes 2 --main_process_port 29999 $RUNPATH/RunModule.py \
 accelerate launch $RUNPATH/RunModule.py \
     --mission_name "${mission}" \
     --TrainModel \
     --pre_method "TensorPre" \
     --train_model_name "Transformer" \
-    --pklfile_train_path "../sample/dataset" \
+    --pklfile_train_path "/scratchfs/juno/fanliangqianjin/muonRec/TRANSFORMER_FOR_TTinput/muon_track_reco_transformer/sample/TTdataset_small/" \
     --embed_dim 64 \
     --num_heads 2 \
     --num_layers 1 \
