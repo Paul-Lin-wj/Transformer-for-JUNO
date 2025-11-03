@@ -32,10 +32,11 @@ SPARSITY_WEIGHT=0.001          # 稀疏度正则化权重
 ENTROPY_WEIGHT=0.0001          # 熵正则化权重
 
 # 数据配置
-# DATASET_PATH="/data/juno/lin/JUNO/transformer/muon_track_reco_transformer/sample/dataset"
-DATASET_PATH="/scratchfs/juno/fanliangqianjin/muonRec/TRANSFORMER_FOR_TTinput/muon_track_reco_transformer/sample/TTdataset_small/"
+DATASET_PATH="/data/juno/lin/JUNO/transformer/muon_track_reco_transformer/sample/data_test"
+# DATASET_PATH="/scratchfs/juno/fanliangqianjin/muonRec/TRANSFORMER_FOR_TTinput/muon_track_reco_transformer/sample/TTdataset_small/"
+MAX_FILES=100                  # 最大加载文件数（可选，留空表示加载所有文件）
 SEQ_LEN=50                     # 序列长度（可选，留空自动确定）
-TRAIN_RATIO=0.8                # 训练集比例
+TRAIN_RATIO=0.8                # 训练集比例（在训练+验证集中的比例）
 NORMALIZE=true                 # 是否归一化数据 (true/false)
 AUGMENT_TRAIN=false            # 是否对训练集进行数据增强 (true/false)
 
@@ -131,8 +132,10 @@ log "  GPU IDs: ${YELLOW}${GPU_IDS:-"Auto"}${NC}"
 log ""
 log "${GREEN}Data Configuration:${NC}"
 log "  Dataset Path: ${YELLOW}$DATASET_PATH${NC}"
+log "  Max Files: ${YELLOW}${MAX_FILES:-"All"}${NC}"
+log "  Data Split: ${YELLOW}4:1 (Train+Val:Test)${NC}"
+log "  Train/Val Split: ${YELLOW}$TRAIN_RATIO${NC} (in Train+Val set)"
 log "  Sequence Length: ${YELLOW}${SEQ_LEN:-"Auto"}${NC}"
-log "  Train Ratio: ${YELLOW}$TRAIN_RATIO${NC}"
 log "  Normalize: ${YELLOW}$NORMALIZE${NC}"
 log "  Augment Train: ${YELLOW}$AUGMENT_TRAIN${NC}"
 log ""
@@ -256,6 +259,7 @@ config = {
 
     # 数据配置
     'dataset_path': '$DATASET_PATH',
+    $( [ -n "$MAX_FILES" ] && echo "'max_files': $MAX_FILES," || echo "" )
     'seq_len': $([ -n "$SEQ_LEN" ] && echo $SEQ_LEN || echo "None"),
     'train_ratio': $TRAIN_RATIO,
     'normalize': $([ "$NORMALIZE" = true ] && echo "True" || echo "False"),

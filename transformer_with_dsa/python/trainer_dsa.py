@@ -16,6 +16,7 @@ DSA优化Transformer的训练器
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import torch.nn.functional as F
 from torch.optim.lr_scheduler import ReduceLROnPlateau, CosineAnnealingLR
 import numpy as np
 import os
@@ -284,11 +285,16 @@ class TrainerWithDSA:
             train_ratio=self.config.get('train_ratio', 0.8),
             normalize=self.config.get('normalize', True),
             augment_train=self.config.get('augment_train', False),
-            num_workers=self.config.get('num_workers', 4)
+            num_workers=self.config.get('num_workers', 4),
+            max_files=self.config.get('max_files', None)
         )
 
         self.train_loader = self.data_loader.get_train_loader()
         self.val_loader = self.data_loader.get_val_loader()
+        # 自动获取测试数据加载器（4:1分割）
+        self.test_loader = self.data_loader.get_test_loader()
+
+        self.logger.info(f"Test dataset loaded automatically: {len(self.test_loader.dataset)} test samples")
 
     def _init_optimizer(self):
         """初始化优化器和损失函数"""
@@ -343,9 +349,75 @@ class TrainerWithDSA:
 
         self.current_model_dir = checkpoint_dir
 
+    def _print_training_config(self):
+        """打印训练配置信息"""
+        import json
+        self.logger.info("="*50)
+        self.logger.info("TRAINING CONFIGURATION")
+        self.logger.info("="*50)
+
+        # 训练参数
+        self.logger.info("Training Parameters:")
+        self.logger.info(f"  Epochs: {self.config['num_epochs']}")
+        self.logger.info(f"  Batch Size: {self.config['batch_size']}")
+        self.logger.info(f"  Learning Rate: {self.config['learning_rate']}")
+        self.logger.info(f"  Save Every: {self.config.get('save_every', 50)} epochs")
+        self.logger.info(f"  Resume Training: {self.config.get('resume_training', False)}")
+
+        # 模型参数
+        self.logger.info("\nModel Parameters:")
+        self.logger.info(f"  Input Dim: {self.config['input_dim']}")
+        self.logger.info(f"  Embed Dim: {self.config['embed_dim']}")
+        self.logger.info(f"  Num Heads: {self.config['num_heads']}")
+        self.logger.info(f"  Num Layers: {self.config['num_layers']}")
+        self.logger.info(f"  FF Dim: {self.config['ff_dim']}")
+        self.logger.info(f"  Output Dim: {self.config['output_dim']}")
+        self.logger.info(f"  Dropout: {self.config.get('dropout', 0.1)}")
+
+        # DSA参数
+        self.logger.info("\nDSA Parameters:")
+        self.logger.info(f"  DSA Enabled: {self.config.get('dsa_enabled', True)}")
+        if self.config.get('dsa_enabled', True):
+            dsa_config = self.config.get('dsa_config', {})
+            self.logger.info(f"  Initial Sparsity: {dsa_config.get('sparsity_ratio', 0.1)}")
+            self.logger.info(f"  Target Sparsity: {dsa_config.get('target_sparsity', 0.05)}")
+            self.logger.info(f"  Sparsity Weight: {self.config.get('sparsity_weight', 0.001)}")
+            self.logger.info(f"  Entropy Weight: {self.config.get('entropy_weight', 0.0001)}")
+
+        # 数据参数
+        self.logger.info("\nData Parameters:")
+        self.logger.info(f"  Dataset Path: {self.config['dataset_path']}")
+        self.logger.info(f"  Data Split: 4:1 (Train+Val:Test)")
+        self.logger.info(f"  Train/Val Split: {self.config.get('train_ratio', 0.8):.0%}:{1-self.config.get('train_ratio', 0.8):.0%} (Train:Val)")
+        self.logger.info(f"  Sequence Length: {self.config.get('seq_len', 'None')}")
+        self.logger.info(f"  Normalize: {self.config.get('normalize', True)}")
+        self.logger.info(f"  Augment Train: {self.config.get('augment_train', False)}")
+
+        # 系统参数
+        self.logger.info("\nSystem Parameters:")
+        self.logger.info(f"  Device: {self.device}")
+        self.logger.info(f"  Num Workers: {self.config.get('num_workers', 4)}")
+        self.logger.info(f"  Log Dir: {self.config.get('log_dir', './logs')}")
+        self.logger.info(f"  Model Dir: {self.config['model_dir']}")
+
+        # 打印数据集信息
+        if hasattr(self, 'data_loader'):
+            dataset_info = self.data_loader.get_dataset_info()
+            self.logger.info("\nDataset Info:")
+            self.logger.info(f"  Train Samples: {dataset_info['train_samples']}")
+            self.logger.info(f"  Validation Samples: {dataset_info['val_samples']}")
+            self.logger.info(f"  Test Samples: {dataset_info['test_samples']}")
+            self.logger.info(f"  Data Shape: {dataset_info['data_shape']}")
+            self.logger.info(f"  Target Shape: {dataset_info['target_shape']}")
+
+        self.logger.info("="*50)
+
     def train(self):
         """主训练循环"""
         self.logger.info("Starting training...")
+
+        # 打印训练配置
+        self._print_training_config()
 
         # 尝试加载检查点
         resume_training = self.config.get('resume_training', False)
@@ -368,6 +440,9 @@ class TrainerWithDSA:
             train_loss, train_metrics = self._train_epoch(epoch)
             val_loss, val_metrics = self._validate_epoch(epoch)
 
+            # 测试集评估（如果有测试数据）
+            test_metrics = self._test_evaluate(epoch)
+
             # 更新DSA稀疏度
             if self.model.dsa_enabled:
                 self.model.update_dsa_sparsity(val_loss)
@@ -380,7 +455,7 @@ class TrainerWithDSA:
                     self.scheduler.step()
 
             # 记录训练历史
-            self._record_training_history(epoch, train_loss, train_metrics, val_loss, val_metrics)
+            self._record_training_history(epoch, train_loss, train_metrics, val_loss, val_metrics, test_metrics)
 
             # 保存检查点
             if (epoch + 1) % self.checkpoint_manager.save_every == 0:
@@ -406,6 +481,10 @@ class TrainerWithDSA:
 
         # 绘制训练曲线
         self._plot_training_curves()
+
+        # 训练结束后进行详细验证
+        self.logger.info("Starting final model validation...")
+        self._validate_model_detailed()
 
         self.logger.info("Training completed!")
 
@@ -582,7 +661,92 @@ class TrainerWithDSA:
 
         return avg_loss, avg_metrics
 
-    def _record_training_history(self, epoch, train_loss, train_metrics, val_loss, val_metrics):
+    def _test_evaluate(self, epoch):
+        """测试集评估 - 计算入口点和出口点的MSE误差"""
+        if self.test_loader is None:
+            return None
+
+        self.model.eval()
+        total_mse_loss = 0
+        entry_point_loss = 0
+        exit_point_loss = 0
+        num_samples = 0
+
+        with torch.no_grad():
+            for data, targets in self.test_loader:
+                data, targets = data.to(self.device), targets.to(self.device)
+
+                # 前向传播
+                if self.model.dsa_enabled:
+                    output, _ = self.model(data, training=False, return_attention=True)
+                else:
+                    output = self.model(data, training=False)
+
+                # 对于回归任务，只使用最后一个时间步的输出
+                if self.config.get('task_type', 'regression') == 'regression':
+                    output = output[:, -1, :]  # [batch_size, output_dim]
+
+                # 处理形状不匹配的情况
+                if len(targets.shape) == 3 and len(output.shape) == 2:
+                    if targets.shape[1] == 1:
+                        targets = targets.squeeze(1)
+
+                if len(output.shape) == 1 and len(targets.shape) == 2:
+                    output = output.unsqueeze(-1)
+
+                # 确保output和targets的形状兼容
+                if output.shape[1] != targets.shape[1]:
+                    min_dim = min(output.shape[1], targets.shape[1])
+                    output = output[:, :min_dim]
+                    targets = targets[:, :min_dim]
+
+                # 检查是否包含NaN
+                if torch.isnan(output).any() or torch.isnan(targets).any():
+                    continue
+
+                # 计算入口点和出口点的MSE
+                # 假设targets和output都是6维：[entry_x, entry_y, entry_z, exit_x, exit_y, exit_z]
+                if output.shape[1] >= 6:
+                    # 入口点误差（前3维）
+                    pred_entry = output[:, :3]
+                    true_entry = targets[:, :3]
+                    entry_mse = F.mse_loss(pred_entry, true_entry)
+
+                    # 出口点误差（后3维）
+                    pred_exit = output[:, 3:6]
+                    true_exit = targets[:, 3:6]
+                    exit_mse = F.mse_loss(pred_exit, true_exit)
+
+                    # 总体MSE
+                    total_mse = F.mse_loss(output[:, :6], targets[:, :6])
+
+                    entry_point_loss += entry_mse.item() * data.size(0)
+                    exit_point_loss += exit_mse.item() * data.size(0)
+                    total_mse_loss += total_mse.item() * data.size(0)
+                    num_samples += data.size(0)
+
+        if num_samples == 0:
+            self.logger.warning("No valid test samples found")
+            return None
+
+        # 计算平均损失
+        avg_entry_loss = entry_point_loss / num_samples
+        avg_exit_loss = exit_point_loss / num_samples
+        avg_total_loss = total_mse_loss / num_samples
+
+        # 打印测试结果
+        self.logger.info(f"Epoch {epoch} - Test Loss (Entry Point): {avg_entry_loss:.6f}")
+        self.logger.info(f"Epoch {epoch} - Test Loss (Exit Point): {avg_exit_loss:.6f}")
+        self.logger.info(f"Epoch {epoch} - Test Loss (Total MSE): {avg_total_loss:.6f}")
+
+        # 返回测试结果
+        return {
+            'test_entry_loss': avg_entry_loss,
+            'test_exit_loss': avg_exit_loss,
+            'test_total_loss': avg_total_loss
+        }
+
+    def _record_training_history(self, epoch, train_loss, train_metrics, val_loss, val_metrics, test_metrics=None):
         """记录训练历史"""
         self.training_history['train_loss'].append(train_loss)
         self.training_history['val_loss'].append(val_loss)
@@ -593,6 +757,11 @@ class TrainerWithDSA:
             self.training_history[f'train_{key}'].append(value)
         for key, value in val_metrics.items():
             self.training_history[f'val_{key}'].append(value)
+
+        # 记录测试指标
+        if test_metrics:
+            for key, value in test_metrics.items():
+                self.training_history[key].append(value)
 
     def _should_early_stop(self, val_loss):
         """早停判断"""
@@ -666,6 +835,243 @@ class TrainerWithDSA:
 
         except Exception as e:
             self.logger.error(f"Error plotting training curves: {e}")
+
+    def _validate_model_detailed(self):
+        """详细验证模型，计算几何误差指标并保存结果"""
+        import numpy as np
+        import matplotlib.pyplot as plt
+
+        self.model.eval()
+
+        # 收集所有预测结果和真实值
+        all_predictions = []
+        all_targets = []
+
+        with torch.no_grad():
+            for data, targets in self.val_loader:
+                data, targets = data.to(self.device), targets.to(self.device)
+
+                # 前向传播
+                if self.model.dsa_enabled:
+                    output, _ = self.model(data, training=False, return_attention=True)
+                else:
+                    output = self.model(data, training=False)
+
+                # 对于回归任务，只使用最后一个时间步的输出
+                if self.config.get('task_type', 'regression') == 'regression':
+                    output = output[:, -1, :]
+
+                # 处理形状不匹配
+                if len(targets.shape) == 3 and len(output.shape) == 2:
+                    if targets.shape[1] == 1:
+                        targets = targets.squeeze(1)
+
+                if len(output.shape) == 1 and len(targets.shape) == 2:
+                    output = output.unsqueeze(-1)
+
+                # 确保形状兼容
+                if output.shape[1] != targets.shape[1]:
+                    min_dim = min(output.shape[1], targets.shape[1])
+                    output = output[:, :min_dim]
+                    targets = targets[:, :min_dim]
+
+                # 转换为numpy并收集
+                all_predictions.append(output.cpu().numpy())
+                all_targets.append(targets.cpu().numpy())
+
+        # 合并所有结果
+        predictions = np.concatenate(all_predictions, axis=0)
+        targets = np.concatenate(all_targets, axis=0)
+
+        # 计算各种误差指标
+        results = self._calculate_geometric_errors(predictions, targets)
+
+        # 保存结果到文件
+        self._save_validation_results(results)
+
+        # 绘制误差分布图
+        self._plot_error_distributions(results)
+
+        self.logger.info("Detailed validation completed!")
+
+    def _calculate_geometric_errors(self, predictions, targets):
+        """计算几何误差指标"""
+        results = []
+
+        for i in range(len(predictions)):
+            if targets.shape[1] < 6:
+                # 如果目标维度不足6，跳过或填充
+                continue
+
+            pred = predictions[i]
+            true = targets[i]
+
+            # 提取入口点和出口点
+            pred_entry = pred[:3]
+            pred_exit = pred[3:6] if pred.shape[0] >= 6 else pred[3:]
+            true_entry = true[:3]
+            true_exit = true[3:6] if true.shape[0] >= 6 else true[3:]
+
+            # 计算坐标差
+            entry_diff = np.linalg.norm(pred_entry - true_entry)
+            exit_diff = np.linalg.norm(pred_exit - true_exit)
+
+            # 计算角度差（两条直线的夹角）
+            pred_direction = pred_exit - pred_entry
+            true_direction = true_exit - true_entry
+
+            # 归一化方向向量
+            pred_norm = np.linalg.norm(pred_direction)
+            true_norm = np.linalg.norm(true_direction)
+
+            if pred_norm > 0 and true_norm > 0:
+                pred_direction = pred_direction / pred_norm
+                true_direction = true_direction / true_norm
+
+                # 计算夹角（弧度）
+                cos_angle = np.clip(np.dot(pred_direction, true_direction), -1.0, 1.0)
+                angle_diff = np.arccos(cos_angle)
+                angle_diff_deg = np.degrees(angle_diff)
+            else:
+                angle_diff_deg = 0.0
+
+            # 计算中点差
+            pred_mid = (pred_entry + pred_exit) / 2
+            true_mid = (true_entry + true_exit) / 2
+            mid_diff = np.linalg.norm(pred_mid - true_mid)
+
+            # 保存结果
+            result = {
+                'sample_id': i,
+                'pred_entry': pred_entry,
+                'pred_exit': pred_exit,
+                'true_entry': true_entry,
+                'true_exit': true_exit,
+                'entry_diff': entry_diff,
+                'exit_diff': exit_diff,
+                'angle_diff_deg': angle_diff_deg,
+                'mid_diff': mid_diff,
+                'pred_line_length': pred_norm,
+                'true_line_length': true_norm
+            }
+            results.append(result)
+
+        return results
+
+    def _save_validation_results(self, results):
+        """保存验证结果到txt文件"""
+        results_file = self.current_model_dir / "validation_results.txt"
+
+        with open(results_file, 'w') as f:
+            f.write("="*80 + "\n")
+            f.write("DETAILED MODEL VALIDATION RESULTS\n")
+            f.write("="*80 + "\n\n")
+
+            # 写入统计信息
+            if results:
+                entry_diffs = [r['entry_diff'] for r in results]
+                exit_diffs = [r['exit_diff'] for r in results]
+                angle_diffs = [r['angle_diff_deg'] for r in results]
+                mid_diffs = [r['mid_diff'] for r in results]
+
+                f.write("SUMMARY STATISTICS:\n")
+                f.write("-"*40 + "\n")
+                f.write(f"Total samples: {len(results)}\n")
+                f.write(f"Entry point error - Mean: {np.mean(entry_diffs):.6f}, Std: {np.std(entry_diffs):.6f}\n")
+                f.write(f"Exit point error - Mean: {np.mean(exit_diffs):.6f}, Std: {np.std(exit_diffs):.6f}\n")
+                f.write(f"Angle difference - Mean: {np.mean(angle_diffs):.6f}°, Std: {np.std(angle_diffs):.6f}°\n")
+                f.write(f"Midpoint error - Mean: {np.mean(mid_diffs):.6f}, Std: {np.std(mid_diffs):.6f}\n\n")
+
+            # 写入每个样本的详细结果
+            f.write("DETAILED RESULTS:\n")
+            f.write("-"*40 + "\n")
+            f.write("ID | Entry_Err | Exit_Err | Angle_Diff(°) | Mid_Err | LineLen_Pred | LineLen_True\n")
+            f.write("-"*85 + "\n")
+
+            for r in results:
+                f.write(f"{r['sample_id']:3d} | ")
+                f.write(f"{r['entry_diff']:10.6f} | ")
+                f.write(f"{r['exit_diff']:9.6f} | ")
+                f.write(f"{r['angle_diff_deg']:12.6f} | ")
+                f.write(f"{r['mid_diff']:8.6f} | ")
+                f.write(f"{r['pred_line_length']:12.6f} | ")
+                f.write(f"{r['true_line_length']:12.6f}\n")
+
+                # 写入坐标信息（可选）
+                f.write(f"    Pred Entry: [{r['pred_entry'][0]:.6f}, {r['pred_entry'][1]:.6f}, {r['pred_entry'][2]:.6f}]\n")
+                f.write(f"    True Entry: [{r['true_entry'][0]:.6f}, {r['true_entry'][1]:.6f}, {r['true_entry'][2]:.6f}]\n")
+                f.write(f"    Pred Exit:  [{r['pred_exit'][0]:.6f}, {r['pred_exit'][1]:.6f}, {r['pred_exit'][2]:.6f}]\n")
+                f.write(f"    True Exit:  [{r['true_exit'][0]:.6f}, {r['true_exit'][1]:.6f}, {r['true_exit'][2]:.6f}]\n")
+                f.write("\n")
+
+        self.logger.info(f"Validation results saved: {results_file}")
+
+    def _plot_error_distributions(self, results):
+        """绘制误差分布统计图"""
+        if not results:
+            self.logger.warning("No results to plot")
+            return
+
+        import matplotlib.pyplot as plt
+
+        # 提取误差数据
+        entry_diffs = [r['entry_diff'] for r in results]
+        exit_diffs = [r['exit_diff'] for r in results]
+        angle_diffs = [r['angle_diff_deg'] for r in results]
+        mid_diffs = [r['mid_diff'] for r in results]
+
+        # 创建子图
+        fig, axes = plt.subplots(2, 2, figsize=(15, 12))
+        fig.suptitle('Error Distribution Statistics', fontsize=16)
+
+        # 入口点误差分布
+        axes[0, 0].hist(entry_diffs, bins=50, alpha=0.7, color='blue', edgecolor='black')
+        axes[0, 0].set_title('Entry Point Error Distribution')
+        axes[0, 0].set_xlabel('Error (mm)')
+        axes[0, 0].set_ylabel('Frequency')
+        axes[0, 0].grid(True, alpha=0.3)
+        axes[0, 0].axvline(np.mean(entry_diffs), color='red', linestyle='--',
+                          label=f'Mean: {np.mean(entry_diffs):.4f}')
+        axes[0, 0].legend()
+
+        # 出口点误差分布
+        axes[0, 1].hist(exit_diffs, bins=50, alpha=0.7, color='green', edgecolor='black')
+        axes[0, 1].set_title('Exit Point Error Distribution')
+        axes[0, 1].set_xlabel('Error (mm)')
+        axes[0, 1].set_ylabel('Frequency')
+        axes[0, 1].grid(True, alpha=0.3)
+        axes[0, 1].axvline(np.mean(exit_diffs), color='red', linestyle='--',
+                          label=f'Mean: {np.mean(exit_diffs):.4f}')
+        axes[0, 1].legend()
+
+        # 角度差分布
+        axes[1, 0].hist(angle_diffs, bins=50, alpha=0.7, color='orange', edgecolor='black')
+        axes[1, 0].set_title('Angle Difference Distribution')
+        axes[1, 0].set_xlabel('Angle (degrees)')
+        axes[1, 0].set_ylabel('Frequency')
+        axes[1, 0].grid(True, alpha=0.3)
+        axes[1, 0].axvline(np.mean(angle_diffs), color='red', linestyle='--',
+                          label=f'Mean: {np.mean(angle_diffs):.2f}°')
+        axes[1, 0].legend()
+
+        # 中点误差分布
+        axes[1, 1].hist(mid_diffs, bins=50, alpha=0.7, color='purple', edgecolor='black')
+        axes[1, 1].set_title('Midpoint Error Distribution')
+        axes[1, 1].set_xlabel('Error (mm)')
+        axes[1, 1].set_ylabel('Frequency')
+        axes[1, 1].grid(True, alpha=0.3)
+        axes[1, 1].axvline(np.mean(mid_diffs), color='red', linestyle='--',
+                          label=f'Mean: {np.mean(mid_diffs):.4f}')
+        axes[1, 1].legend()
+
+        plt.tight_layout()
+
+        # 保存图像
+        plot_path = self.current_model_dir / "error_distributions.png"
+        plt.savefig(plot_path, dpi=300, bbox_inches='tight')
+        plt.close()
+
+        self.logger.info(f"Error distribution plots saved: {plot_path}")
 
 
 def test_trainer():
