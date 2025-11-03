@@ -32,7 +32,8 @@ SPARSITY_WEIGHT=0.001          # 稀疏度正则化权重
 ENTROPY_WEIGHT=0.0001          # 熵正则化权重
 
 # 数据配置
-DATASET_PATH="/data/juno/lin/JUNO/transformer/muon_track_reco_transformer/sample/dataset"
+# DATASET_PATH="/data/juno/lin/JUNO/transformer/muon_track_reco_transformer/sample/dataset"
+DATASET_PATH="/scratchfs/juno/fanliangqianjin/muonRec/TRANSFORMER_FOR_TTinput/muon_track_reco_transformer/sample/TTdataset_small/"
 SEQ_LEN=50                     # 序列长度（可选，留空自动确定）
 TRAIN_RATIO=0.8                # 训练集比例
 NORMALIZE=true                 # 是否归一化数据 (true/false)
@@ -55,8 +56,8 @@ MIN_LR=1e-6                    # 最小学习率
 TASK_TYPE="regression"          # 任务类型: "regression", "classification", "binary_classification"
 
 # GPU配置
-NUM_GPUS=2                      # GPU数量，0表示CPU，>0表示使用GPU
-GPU_IDS="0,1"                      # 指定使用的GPU ID，例如"0,1,2,3"，留空则自动选择
+NUM_GPUS=1                      # GPU数量，0表示CPU，>0表示使用GPU
+GPU_IDS="0"                      # 指定使用的GPU ID，例如"0,1,2,3"，留空则自动选择
 
 # 系统配置
 NUM_WORKERS=4                  # 数据加载进程数

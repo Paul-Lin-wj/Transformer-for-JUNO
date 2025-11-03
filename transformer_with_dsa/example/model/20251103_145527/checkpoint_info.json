@@ -1,0 +1,21 @@
+{
+  "latest_epoch": 49,
+  "latest_checkpoint": "checkpoint_epoch_49.pth",
+  "latest_loss": NaN,
+  "latest_metrics": {
+    "val_loss": NaN,
+    "train_loss": 0.6462594270706177
+  },
+  "checkpoints": [
+    {
+      "epoch": 49,
+      "filename": "checkpoint_epoch_49.pth",
+      "loss": NaN,
+      "metrics": {
+        "val_loss": NaN,
+        "train_loss": 0.6462594270706177
+      },
+      "timestamp": "2025-11-03T14:55:40.793486"
+    }
+  ]
+}
