@@ -18,6 +18,7 @@ import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 from torch.optim.lr_scheduler import ReduceLROnPlateau, CosineAnnealingLR
+from accelerate import Accelerator
 import numpy as np
 import os
 import json
@@ -214,7 +215,15 @@ class TrainerWithDSA:
             config: 训练配置字典
         """
         self.config = config
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+        # 初始化accelerator（使用默认配置）
+        self.accelerator = Accelerator()
+
+        # 禁用DDP的buffer同步以避免内存冲突
+        if self.accelerator.distributed_type.value == "MULTI_GPU":
+            import torch.distributed as dist
+            # 保存原始的find_unused_parameters设置
+            # 注意：这需要在prepare_model之前设置
 
         # 设置日志
         self._setup_logging()
@@ -238,8 +247,12 @@ class TrainerWithDSA:
         self.start_epoch = 0
 
         self.logger.info("Trainer with DSA initialized")
-        self.logger.info(f"Device: {self.device}")
-        self.logger.info(f"Model: {self.model.get_model_size()}")
+        self.logger.info(f"Device: {self.accelerator.device}")
+        self.logger.info(f"Number of processes: {self.accelerator.num_processes}")
+        self.logger.info(f"Distributed type: {self.accelerator.distributed_type}")
+        # 获取原始模型来显示模型大小
+        original_model = self.accelerator.unwrap_model(self.model)
+        self.logger.info(f"Model: {original_model.get_model_size()}")
 
     def _setup_logging(self):
         """设置日志"""
@@ -272,7 +285,14 @@ class TrainerWithDSA:
             dsa_enabled=self.config.get('dsa_enabled', True),
             dsa_config=self.config.get('dsa_config', create_default_dsa_config()),
             task_type=self.config.get('task_type', 'regression')
-        ).to(self.device)
+        )
+
+        # 使用accelerator准备模型（会自动处理多GPU分布）
+        self.model = self.accelerator.prepare(self.model)
+
+        # 对于多GPU训练，禁用buffer同步以避免内存冲突
+        if hasattr(self.model, 'module') and hasattr(self.model.module, 'broadcast_buffers'):
+            self.model.module.broadcast_buffers = False
 
     def _init_data_loader(self):
         """初始化数据加载器"""
@@ -293,6 +313,11 @@ class TrainerWithDSA:
         self.val_loader = self.data_loader.get_val_loader()
         # 自动获取测试数据加载器（4:1分割）
         self.test_loader = self.data_loader.get_test_loader()
+
+        # 使用accelerator准备数据加载器（会自动处理分布式采样）
+        self.train_loader, self.val_loader, self.test_loader = self.accelerator.prepare(
+            self.train_loader, self.val_loader, self.test_loader
+        )
 
         self.logger.info(f"Test dataset loaded automatically: {len(self.test_loader.dataset)} test samples")
 
@@ -322,6 +347,9 @@ class TrainerWithDSA:
             )
         else:
             self.scheduler = None
+
+        # 使用accelerator准备优化器
+        self.optimizer = self.accelerator.prepare(self.optimizer)
 
         # 损失函数
         if self.config.get('task_type', 'regression') == 'classification':
@@ -395,7 +423,9 @@ class TrainerWithDSA:
 
         # 系统参数
         self.logger.info("\nSystem Parameters:")
-        self.logger.info(f"  Device: {self.device}")
+        self.logger.info(f"  Device: {self.accelerator.device}")
+        self.logger.info(f"  Number of Processes: {self.accelerator.num_processes}")
+        self.logger.info(f"  Distributed Type: {self.accelerator.distributed_type}")
         self.logger.info(f"  Num Workers: {self.config.get('num_workers', 4)}")
         self.logger.info(f"  Log Dir: {self.config.get('log_dir', './logs')}")
         self.logger.info(f"  Model Dir: {self.config['model_dir']}")
@@ -444,7 +474,9 @@ class TrainerWithDSA:
             test_metrics = self._test_evaluate(epoch)
 
             # 更新DSA稀疏度
-            if self.model.dsa_enabled:
+            # 使用unwrapped model访问原始模型属性
+            unwrapped_model = self.accelerator.unwrap_model(self.model)
+            if unwrapped_model.dsa_enabled:
                 self.model.update_dsa_sparsity(val_loss)
 
             # 学习率调度
@@ -457,35 +489,40 @@ class TrainerWithDSA:
             # 记录训练历史
             self._record_training_history(epoch, train_loss, train_metrics, val_loss, val_metrics, test_metrics)
 
-            # 保存检查点
+            # 保存检查点（只在主进程中保存）
             if (epoch + 1) % self.checkpoint_manager.save_every == 0:
-                training_state = dict(self.training_history)
-                self.checkpoint_manager.save_checkpoint(
-                    model=self.model,
-                    optimizer=self.optimizer,
-                    scheduler=self.scheduler,
-                    epoch=epoch,
-                    loss=val_loss,
-                    metrics={'val_loss': val_loss, 'train_loss': train_loss},
-                    dsa_stats=train_metrics.get('dsa_stats', {}),
-                    training_state=training_state
-                )
+                self.accelerator.wait_for_everyone()
+                if self.accelerator.is_main_process:
+                    training_state = dict(self.training_history)
+                    # 获取unwrapped模型（移除accelerator包装）
+                    unwrapped_model = self.accelerator.unwrap_model(self.model)
+                    self.checkpoint_manager.save_checkpoint(
+                        model=unwrapped_model,
+                        optimizer=self.optimizer,
+                        scheduler=self.scheduler,
+                        epoch=epoch,
+                        loss=val_loss,
+                        metrics={'val_loss': val_loss, 'train_loss': train_loss},
+                        dsa_stats=train_metrics.get('dsa_stats', {}),
+                        training_state=training_state
+                    )
 
             # 早停检查
             if self._should_early_stop(val_loss):
                 self.logger.info(f"Early stopping at epoch {epoch}")
                 break
 
-        # 保存最终模型
-        self._save_final_model()
+        # 保存最终模型（只在主进程中保存）
+        self.accelerator.wait_for_everyone()
+        if self.accelerator.is_main_process:
+            self._save_final_model()
+            # 绘制训练曲线
+            self._plot_training_curves()
+            # 训练结束后进行详细验证
+            self.logger.info("Starting final model validation...")
+            self._validate_model_detailed()
 
-        # 绘制训练曲线
-        self._plot_training_curves()
-
-        # 训练结束后进行详细验证
-        self.logger.info("Starting final model validation...")
-        self._validate_model_detailed()
-
+        self.accelerator.wait_for_everyone()
         self.logger.info("Training completed!")
 
     def _train_epoch(self, epoch):
@@ -495,12 +532,14 @@ class TrainerWithDSA:
         all_metrics = defaultdict(list)
 
         for batch_idx, (data, targets) in enumerate(self.train_loader):
-            data, targets = data.to(self.device), targets.to(self.device)
+            # accelerator会自动处理数据移动，不需要手动.to(device)
+            pass
 
             self.optimizer.zero_grad()
 
-            # 前向传播
-            if self.model.dsa_enabled:
+            # 前向传播（使用unwrap_model访问原始模型属性）
+            unwrapped_model = self.accelerator.unwrap_model(self.model)
+            if unwrapped_model.dsa_enabled:
                 output, stats = self.model(data, training=True, return_attention=True)
                 dsa_stats = stats['global_stats']
             else:
@@ -549,8 +588,8 @@ class TrainerWithDSA:
             if dsa_stats:
                 all_metrics['sparsity'].append(dsa_stats.get('avg_sparsity', 0))
 
-            # 定期输出
-            if batch_idx % 100 == 0:
+            # 定期输出（只在主进程中输出）
+            if batch_idx % 100 == 0 and self.accelerator.is_main_process:
                 self.logger.info(f"Epoch {epoch}, Batch {batch_idx}/{len(self.train_loader)}, "
                                f"Loss: {loss.item():.6f}")
 
@@ -568,7 +607,8 @@ class TrainerWithDSA:
 
         with torch.no_grad():
             for data, targets in self.val_loader:
-                data, targets = data.to(self.device), targets.to(self.device)
+                # accelerator会自动处理数据移动，不需要手动.to(device)
+                pass
 
                 # 检查输入数据是否包含NaN
                 if torch.isnan(data).any():
@@ -579,7 +619,9 @@ class TrainerWithDSA:
                     continue
 
                 # 前向传播
-                if self.model.dsa_enabled:
+                # 使用unwrapped model访问原始模型属性
+                unwrapped_model = self.accelerator.unwrap_model(self.model)
+                if unwrapped_model.dsa_enabled:
                     output, stats = self.model(data, training=False, return_attention=True)
                     dsa_stats = stats['global_stats']
                 else:
@@ -674,10 +716,13 @@ class TrainerWithDSA:
 
         with torch.no_grad():
             for data, targets in self.test_loader:
-                data, targets = data.to(self.device), targets.to(self.device)
+                # accelerator会自动处理数据移动，不需要手动.to(device)
+                pass
 
                 # 前向传播
-                if self.model.dsa_enabled:
+                # 使用unwrapped model访问原始模型属性
+                unwrapped_model = self.accelerator.unwrap_model(self.model)
+                if unwrapped_model.dsa_enabled:
                     output, _ = self.model(data, training=False, return_attention=True)
                 else:
                     output = self.model(data, training=False)
@@ -849,10 +894,13 @@ class TrainerWithDSA:
 
         with torch.no_grad():
             for data, targets in self.val_loader:
-                data, targets = data.to(self.device), targets.to(self.device)
+                # accelerator会自动处理数据移动，不需要手动.to(device)
+                pass
 
                 # 前向传播
-                if self.model.dsa_enabled:
+                # 使用unwrapped model访问原始模型属性
+                unwrapped_model = self.accelerator.unwrap_model(self.model)
+                if unwrapped_model.dsa_enabled:
                     output, _ = self.model(data, training=False, return_attention=True)
                 else:
                     output = self.model(data, training=False)

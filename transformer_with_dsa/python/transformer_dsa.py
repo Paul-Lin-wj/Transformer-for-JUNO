@@ -31,6 +31,7 @@ class PositionalEncoding(nn.Module):
     def __init__(self, embed_dim, max_len=5000):
         super().__init__()
 
+        # 创建位置编码，确保内存独立
         pe = torch.zeros(max_len, embed_dim)
         position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
         div_term = torch.exp(torch.arange(0, embed_dim, 2).float() *
@@ -40,10 +41,14 @@ class PositionalEncoding(nn.Module):
         pe[:, 1::2] = torch.cos(position * div_term)
         pe = pe.unsqueeze(0).transpose(0, 1)
 
-        self.register_buffer('pe', pe)
+        # 使用clone确保内存独立，避免DDP中的buffer冲突
+        self.register_buffer('pe', pe.clone())
 
     def forward(self, x):
-        return x + self.pe[:x.size(0), :]
+        # 使用clone()避免内存别名问题，确保分布式训练兼容性
+        # 获取位置编码并创建副本，避免与原始buffer共享内存
+        pe_slice = self.pe[:x.size(0), :].clone()
+        return x + pe_slice
 
 
 class DSAMultiHeadAttention(nn.Module):
@@ -151,7 +156,7 @@ class DSAMultiHeadAttention(nn.Module):
 
         # 应用掩码
         if mask is not None:
-            scores.masked_fill_(mask == 0, -1e9)
+            scores = scores.masked_fill(mask == 0, -1e9)
 
         # Softmax
         attention_weights = F.softmax(scores, dim=-1)

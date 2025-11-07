@@ -1,0 +1,23 @@
+{
+  "dsa_enabled": true,
+  "block_0": {
+    "current_sparsity": 0.1,
+    "importance_weight": 1.0,
+    "temperature": 0.10000000149011612
+  },
+  "block_1": {
+    "current_sparsity": 0.1,
+    "importance_weight": 1.0,
+    "temperature": 0.10000000149011612
+  },
+  "block_2": {
+    "current_sparsity": 0.1,
+    "importance_weight": 1.0,
+    "temperature": 0.10000000149011612
+  },
+  "block_3": {
+    "current_sparsity": 0.1,
+    "importance_weight": 1.0,
+    "temperature": 0.10000000149011612
+  }
+}

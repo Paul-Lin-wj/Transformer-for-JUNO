@@ -178,42 +178,26 @@ class DataLoaderWithDSA:
         self.data, self.targets = self._load_dataset()
         self.logger.info(f"Debug: After _load_dataset - data shape: {self.data.shape}, targets shape: {self.targets.shape}")
 
-        # 对于序列数据，创建滑动窗口样本
+        # 对于序列数据，直接使用整个轨迹作为输入（与原始Transformer相同）
         if len(self.data.shape) == 3:
-            # 每个事件生成多个样本（滑动窗口）
+            # 每个事件作为一个样本（不使用滑动窗口）
             all_sequences = []
             all_targets = []
-
-            seq_len_input = self.seq_len if self.seq_len is not None else 200  # 默认窗口长度
 
             for event_idx in range(self.data.shape[0]):
                 sequence = self.data[event_idx]  # [seq_len, features]
                 target = self.targets[event_idx]  # [target_dim]
 
-                # 创建滑动窗口
-                # 检查序列长度
-                self.logger.info(f"Debug: Processing event {event_idx}, sequence length: {sequence.shape[0]}, seq_len_input: {seq_len_input}")
-
-                if sequence.shape[0] < seq_len_input:
-                    # 序列太短，跳过或使用padding
-                    self.logger.warning(f"Sequence too short: {sequence.shape[0]} < {seq_len_input}")
-                    # 使用padding
-                    padding = np.zeros((seq_len_input - sequence.shape[0], sequence.shape[1]))
-                    padded_sequence = np.vstack([sequence, padding])
-                    all_sequences.append(padded_sequence)
-                    all_targets.append(target)
-                else:
-                    for start_idx in range(0, sequence.shape[0] - seq_len_input + 1, seq_len_input // 4):
-                        end_idx = start_idx + seq_len_input
-                        seq_window = sequence[start_idx:end_idx]
-                        all_sequences.append(seq_window)
-                        all_targets.append(target)
+                # 直接使用整个序列
+                self.logger.info(f"Event {event_idx}: sequence length = {sequence.shape[0]}")
+                all_sequences.append(sequence)
+                all_targets.append(target)
 
             # 转换为numpy数组
             all_sequences = np.array(all_sequences)
             all_targets = np.array(all_targets)
 
-            self.logger.info(f"Created {len(all_sequences)} sequences from {self.data.shape[0]} events")
+            self.logger.info(f"Created {len(all_sequences)} samples from {self.data.shape[0]} events (1:1)")
 
             # 第一步：4:1分割为训练+验证集 和 测试集
             train_val_data, test_data, train_val_targets, test_targets = \

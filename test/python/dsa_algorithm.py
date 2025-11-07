@@ -112,7 +112,15 @@ class DSAModule(nn.Module):
 
         # 应用掩码（如果提供）
         if mask is not None:
-            scores = scores.masked_fill(mask == 0, -1e9)
+            # mask shape: [batch_size, seq_len]
+            # scores shape: [batch_size, num_heads, seq_len, seq_len]
+            # Need to expand mask for multi-head attention
+            # Handle both boolean and 0/1 masks
+            if mask.dtype == torch.bool:
+                mask = ~mask  # Convert from True=pad to False=pad
+            mask = mask.unsqueeze(1).unsqueeze(1)  # [batch_size, 1, 1, seq_len]
+            mask = mask.expand_as(scores)  # Broadcast to scores shape
+            scores = scores.masked_fill(mask, -1e9)
 
         # 应用softmax获得权重
         attention_weights = F.softmax(scores, dim=-1)

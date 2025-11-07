@@ -1,0 +1,21 @@
+{
+  "dataset_path": "/data/juno/lin/JUNO/transformer/muon_track_reco_transformer/test/example/dataset",
+  "model_dir": "./model",
+  "log_dir": "./log",
+  "num_epochs": 1,
+  "batch_size": 4,
+  "learning_rate": 0.001,
+  "input_dim": 5,
+  "embed_dim": 32,
+  "num_heads": 2,
+  "num_layers": 1,
+  "output_dim": 6,
+  "train_ratio": 0.8,
+  "num_workers": 0,
+  "dsa_enabled": true,
+  "dsa_config": {
+    "sparsity_ratio": 0.1,
+    "adaptive_threshold": true,
+    "min_connections": 3
+  }
+}

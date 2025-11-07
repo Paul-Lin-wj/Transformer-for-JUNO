@@ -9,18 +9,18 @@
 # ==========================================
 
 # 训练基本配置
-NUM_EPOCHS=200                 # 训练轮数
-BATCH_SIZE=16                  # 批大小（Batch = Training_Samples/Batch_Size）
+NUM_EPOCHS=100                   # 训练轮数（减少用于测试）
+BATCH_SIZE=4                  # 批大小（减小以减少GPU内存使用）
 LEARNING_RATE=0.001            # 学习率
-SAVE_EVERY=50                  # 每隔多少epoch保存模型
+SAVE_EVERY=20                   # 每隔多少epoch保存模型
 RESUME_TRAINING=false          # 是否从上次训练继续 (true/false)
 
 # 模型配置
 INPUT_DIM=5                    # 输入特征维度
-EMBED_DIM=48                   # 嵌入维度（进一步减小）
-NUM_HEADS=6                    # 注意力头数（减小）
-NUM_LAYERS=4                   # Transformer层数
-FF_DIM=192                     # 前馈网络隐藏层维度（进一步减小）
+EMBED_DIM=32                   # 嵌入维度（减少内存）
+NUM_HEADS=4                    # 注意力头数（减少内存）
+NUM_LAYERS=2                   # Transformer层数（减少内存）
+HIDDEN_DIM=64                  # 前馈网络隐藏层维度（减少内存）
 OUTPUT_DIM=6                   # 输出维度（入射点3个+出射点3个坐标）
 DROPOUT=0.1                    # Dropout率
 
@@ -32,36 +32,24 @@ SPARSITY_WEIGHT=0.001          # 稀疏度正则化权重
 ENTROPY_WEIGHT=0.0001          # 熵正则化权重
 
 # 数据配置
-# DATASET_PATH="/data/juno/lin/JUNO/transformer/muon_track_reco_transformer/sample/data_test"
+# DATASET_PATH="/data/juno/lin/JUNO/transformer/muon_track_reco_transformer/sample/dataset"
 DATASET_PATH="/scratchfs/juno/fanliangqianjin/muonRec/TRANSFORMER_FOR_TTinput/muon_track_reco_transformer/sample/TTdataset_small/"
-MAX_FILES=600                  # 最大加载文件数（可选，留空表示加载所有文件）
-SEQ_LEN=2000                   # 序列长度（完整轨迹长度）
-TRAIN_RATIO=0.8                # 训练集比例（在训练+验证集中的比例）
+MAX_FILES="100"                      # 最大加载文件数（可选，留空表示加载所有文件）
+TRAIN_RATIO=0.8                # 训练集比例
 NORMALIZE=true                 # 是否归一化数据 (true/false)
-AUGMENT_TRAIN=false            # 是否对训练集进行数据增强 (true/false)
 
 # 训练策略配置
 SCHEDULER="plateau"             # 学习率调度器: "plateau", "cosine", "none"
 WEIGHT_DECAY=1e-4              # 权重衰减
-GRAD_CLIP=1.0                  # 梯度裁剪阈值（留空禁用）
-EARLY_STOPPING_PATIENCE=50     # 早停耐心值
+EARLY_STOPPING_PATIENCE=30     # 早停耐心值
 MIN_DELTA=1e-6                 # 早停最小改善阈值
 
-# 优化器配置
-OPTIMIZER="adamw"               # 优化器类型: "adam", "adamw", "sgd"
-SCHEDULER_FACTOR=0.5           # 学习率衰减因子
-SCHEDULER_PATIENCE=10          # 学习率调度耐心值
-MIN_LR=1e-6                    # 最小学习率
-
-# 任务配置
-TASK_TYPE="regression"          # 任务类型: "regression", "classification", "binary_classification"
-
 # GPU配置
-NUM_GPUS=1                      # GPU数量，0表示CPU，>0表示使用GPU（临时使用单GPU）
-GPU_IDS="0"                      # 指定使用的GPU ID，例如"0,1,2,3"，留空则自动选择
+NUM_GPUS=2                      # GPU数量，0表示CPU，>0表示使用GPU
+GPU_IDS="0,1"                     # 指定使用的GPU ID，例如"0,1,2,3"，留空则自动选择
 
 # 系统配置
-NUM_WORKERS=4                  # 数据加载进程数
+NUM_WORKERS=16                  # 数据加载进程数
 LOG_DIR="./log"                 # 日志保存目录
 MODEL_DIR="./model"             # 模型保存目录
 
@@ -78,18 +66,64 @@ source $ROOTPATH
 source $RUNENVPATH
 
 # 设置CUDA内存管理以避免内存碎片化
-export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True,garbage_collection_threshold:0.8
+export CUDA_LAUNCH_BLOCKING=1  # 同步CUDA操作，更容易调试
+export TORCH_CUDA_ARCH_LIST="8.6"  # 指定GPU架构
+
+# 禁用Python输出缓冲
+export PYTHONUNBUFFERED=1
+export PYTHONDONTWRITEBYTECODE=1
 
 # 设置DDP参数以避免buffer同步问题
 export TORCH_DISTRIBUTED_DEBUG=DETAIL
 export NCCL_DEBUG=WARN
 
-# 创建日志目录
+# 创建必要的目录
 mkdir -p "$LOG_DIR"
+mkdir -p "$MODEL_DIR"
 
 # 生成带时间戳的日志文件
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
 LOG_FILE="$LOG_DIR/training_${TIMESTAMP}.log"
+
+# 创建日志文件并记录系统信息（在log文件最开头）
+echo "========================================" > "$LOG_FILE"
+echo "TRAINING LOG STARTED AT: $(date)" >> "$LOG_FILE"
+echo "========================================" >> "$LOG_FILE"
+echo "" >> "$LOG_FILE"
+echo "SYSTEM & PROCESS INFORMATION:" >> "$LOG_FILE"
+echo "========================================" >> "$LOG_FILE"
+echo "Process ID (PID): $$" >> "$LOG_FILE"
+echo "Parent PID: $PPID" >> "$LOG_FILE"
+echo "Script name: $0" >> "$LOG_FILE"
+echo "User: $(whoami)" >> "$LOG_FILE"
+echo "Working directory: $(pwd)" >> "$LOG_FILE"
+echo "" >> "$LOG_FILE"
+
+# System information
+echo "SYSTEM INFORMATION:" >> "$LOG_FILE"
+echo "OS: $(uname -s) $(uname -r)" >> "$LOG_FILE"
+echo "CPU Info: $(lscpu | grep 'Model name' | awk -F': ' '{print $2}')" >> "$LOG_FILE"
+echo "CPU Cores: $(nproc) logical, $(lscpu | grep 'Core(s) per socket' | awk '{print $4}') physical per socket" >> "$LOG_FILE"
+echo "Memory Info:" >> "$LOG_FILE"
+free -h | grep -E "Mem|Swap" >> "$LOG_FILE"
+echo "" >> "$LOG_FILE"
+
+# GPU information (if available)
+if command -v nvidia-smi &> /dev/null; then
+    echo "GPU INFORMATION:" >> "$LOG_FILE"
+    nvidia-smi --query-gpu=index,name,memory.total,memory.used,memory.free,utilization.gpu --format=csv,noheader,nounits >> "$LOG_FILE"
+else
+    echo "GPU INFORMATION:" >> "$LOG_FILE"
+    echo "nvidia-smi not available" >> "$LOG_FILE"
+fi
+echo "" >> "$LOG_FILE"
+
+# Disk information
+echo "DISK INFORMATION:" >> "$LOG_FILE"
+df -h . | tail -n 1 >> "$LOG_FILE"
+echo "========================================" >> "$LOG_FILE"
+echo "" >> "$LOG_FILE"
 
 # 颜色输出（仅在终端显示，不写入日志）
 RED='\033[0;31m'
@@ -123,7 +157,7 @@ log "  Input Dim: ${YELLOW}$INPUT_DIM${NC}"
 log "  Embed Dim: ${YELLOW}$EMBED_DIM${NC}"
 log "  Num Heads: ${YELLOW}$NUM_HEADS${NC}"
 log "  Num Layers: ${YELLOW}$NUM_LAYERS${NC}"
-log "  FF Dim: ${YELLOW}$FF_DIM${NC}"
+log "  Hidden Dim: ${YELLOW}$HIDDEN_DIM${NC}"
 log "  Output Dim: ${YELLOW}$OUTPUT_DIM${NC}"
 log "  Dropout: ${YELLOW}$DROPOUT${NC}"
 log ""
@@ -140,16 +174,11 @@ log ""
 log "${GREEN}Data Configuration:${NC}"
 log "  Dataset Path: ${YELLOW}$DATASET_PATH${NC}"
 log "  Max Files: ${YELLOW}${MAX_FILES:-"All"}${NC}"
-log "  Data Split: ${YELLOW}4:1 (Train+Val:Test)${NC}"
-log "  Train/Val Split: ${YELLOW}$TRAIN_RATIO${NC} (in Train+Val set)"
-log "  Sequence Length: ${YELLOW}${SEQ_LEN:-"Auto"}${NC}"
-log "  Normalize: ${YELLOW}$NORMALIZE${NC}"
-log "  Augment Train: ${YELLOW}$AUGMENT_TRAIN${NC}"
+log "  Train Ratio: ${YELLOW}$TRAIN_RATIO${NC}"
 log ""
 log "${GREEN}System Configuration:${NC}"
 log "  Log Dir: ${YELLOW}$LOG_DIR${NC}"
 log "  Model Dir: ${YELLOW}$MODEL_DIR${NC}"
-log "  Num Workers: ${YELLOW}$NUM_WORKERS${NC}"
 log "  Log File: ${YELLOW}$LOG_FILE${NC}"
 log "${BLUE}========================================${NC}"
 
@@ -211,111 +240,42 @@ if [ ! -d "$DATASET_PATH" ]; then
     log "${YELLOW}Please check the DATASET_PATH variable.${NC}"
 fi
 
-# 创建必要的目录
-log "${BLUE}Creating directories...${NC}"
-mkdir -p "$LOG_DIR"
-mkdir -p "$MODEL_DIR"
-
 # 设置Python路径
 export PYTHONPATH="${PYTHONPATH}:$(dirname "$0")/../python"
 
-# 构建DSA配置
-DSA_CONFIG=""
-if [ "$DSA_ENABLED" = true ]; then
-    DSA_CONFIG="{
-        \"sparsity_ratio\": $SPARSITY_RATIO,
-        \"target_sparsity\": $TARGET_SPARSITY,
-        \"adaptive_threshold\": True,
-        \"min_connections\": 5,
-        \"warmup_epochs\": 10,
-        \"schedule_type\": \"adaptive\"
-    }"
+# 计算test_size（避免浮点数运算）
+TEST_SIZE=$(awk "BEGIN {printf \"%.2f\", 1-$TRAIN_RATIO}")
+
+# 构建训练命令
+TRAIN_CMD="python ../python/RunModule.py"
+TRAIN_CMD="$TRAIN_CMD --TrainModel"
+TRAIN_CMD="$TRAIN_CMD --mission_name dsa_transformer"
+TRAIN_CMD="$TRAIN_CMD --pre_method TensorPre"
+TRAIN_CMD="$TRAIN_CMD --train_model_name Transformer"
+TRAIN_CMD="$TRAIN_CMD --pklfile_train_path \"$DATASET_PATH\""
+# 添加MAX_FILES参数（如果设置了的话）
+if [ -n "$MAX_FILES" ] && [ "$MAX_FILES" != "" ]; then
+    TRAIN_CMD="$TRAIN_CMD --max_files $MAX_FILES"
 fi
+TRAIN_CMD="$TRAIN_CMD --num_epochs $NUM_EPOCHS"
+TRAIN_CMD="$TRAIN_CMD --batch_size $BATCH_SIZE"
+TRAIN_CMD="$TRAIN_CMD --learning_rate $LEARNING_RATE"
+TRAIN_CMD="$TRAIN_CMD --embed_dim $EMBED_DIM"
+TRAIN_CMD="$TRAIN_CMD --num_heads $NUM_HEADS"
+TRAIN_CMD="$TRAIN_CMD --num_layers $NUM_LAYERS"
+TRAIN_CMD="$TRAIN_CMD --hidden_dim $HIDDEN_DIM"
+TRAIN_CMD="$TRAIN_CMD --input_dim $INPUT_DIM"
+TRAIN_CMD="$TRAIN_CMD --test_size $TEST_SIZE"
+TRAIN_CMD="$TRAIN_CMD --GPUid \"$GPU_IDS\""
 
-# 构建Python训练脚本
-cat > /tmp/train_dsa_config.py << EOF
-import sys
-import os
-sys.path.append(os.path.dirname(os.path.abspath(__file__)) + '/../python')
-
-from trainer_dsa import TrainerWithDSA
-
-# 训练配置
-config = {
-    # 基本配置
-    'num_epochs': $NUM_EPOCHS,
-    'batch_size': $BATCH_SIZE,
-    'learning_rate': $LEARNING_RATE,
-    'save_every': $SAVE_EVERY,
-    'resume_training': $([ "$RESUME_TRAINING" = true ] && echo "True" || echo "False"),
-
-    # 模型配置
-    'input_dim': $INPUT_DIM,
-    'embed_dim': $EMBED_DIM,
-    'num_heads': $NUM_HEADS,
-    'num_layers': $NUM_LAYERS,
-    'ff_dim': $FF_DIM,
-    'output_dim': $OUTPUT_DIM,
-    'dropout': $DROPOUT,
-
-    # DSA配置
-    'dsa_enabled': $([ "$DSA_ENABLED" = true ] && echo "True" || echo "False"),
-    'dsa_config': $([ "$DSA_ENABLED" = true ] && echo "$DSA_CONFIG" || echo "None"),
-    'sparsity_weight': $SPARSITY_WEIGHT,
-    'entropy_weight': $ENTROPY_WEIGHT,
-
-    # 数据配置
-    'dataset_path': '$DATASET_PATH',
-    $( [ -n "$MAX_FILES" ] && echo "'max_files': $MAX_FILES," || echo "" )
-    'seq_len': $([ -n "$SEQ_LEN" ] && echo $SEQ_LEN || echo "None"),
-    'train_ratio': $TRAIN_RATIO,
-    'normalize': $([ "$NORMALIZE" = true ] && echo "True" || echo "False"),
-    'augment_train': $([ "$AUGMENT_TRAIN" = true ] && echo "True" || echo "False"),
-
-    # 训练策略配置
-    'scheduler': '$SCHEDULER',
-    'weight_decay': $WEIGHT_DECAY,
-    $( [ -n "$GRAD_CLIP" ] && echo "'grad_clip': $GRAD_CLIP," || echo "" )
-    'early_stopping_patience': $EARLY_STOPPING_PATIENCE,
-    'min_delta': $MIN_DELTA,
-
-    # 优化器配置
-    'scheduler_factor': $SCHEDULER_FACTOR,
-    'scheduler_patience': $SCHEDULER_PATIENCE,
-    'min_lr': $MIN_LR,
-
-    # 任务配置
-    'task_type': '$TASK_TYPE',
-
-    # GPU配置
-    'num_gpus': $NUM_GPUS,
-    'gpu_ids': '$GPU_IDS',
-
-    # 系统配置
-    'num_workers': $NUM_WORKERS,
-    'log_dir': '$LOG_DIR',
-    'model_dir': '$MODEL_DIR',
-}
-
-if __name__ == "__main__":
-    print("Starting Transformer with DSA training...")
-    print(f"Configuration: {config}")
-
-    try:
-        # 创建训练器
-        trainer = TrainerWithDSA(config)
-
-        # 开始训练
-        trainer.train()
-
-        print("Training completed successfully!")
-
-    except Exception as e:
-        print(f"Training failed with error: {e}")
-        import traceback
-        traceback.print_exc()
-        sys.exit(1)
-EOF
+# 添加DSA参数
+if [ "$DSA_ENABLED" = true ]; then
+    TRAIN_CMD="$TRAIN_CMD --dsa_enabled"
+    TRAIN_CMD="$TRAIN_CMD --sparsity_ratio $SPARSITY_RATIO"
+    TRAIN_CMD="$TRAIN_CMD --target_sparsity $TARGET_SPARSITY"
+    TRAIN_CMD="$TRAIN_CMD --sparsity_weight $SPARSITY_WEIGHT"
+    TRAIN_CMD="$TRAIN_CMD --entropy_weight $ENTROPY_WEIGHT"
+fi
 
 # 启动训练
 log "${BLUE}Starting training...${NC}"
@@ -328,21 +288,27 @@ cd "$(dirname "$0")"
 START_TIME=$(date)
 log "Training started at: $START_TIME"
 
-# 运行训练（根据GPU数量选择不同的启动方式）
+# Debug: Print the command that will be executed
+log "${BLUE}Executing command:${NC}"
+log "$TRAIN_CMD"
+log "${BLUE}========================================${NC}"
+
+# 运行训练
 if [ "$NUM_GPUS" -gt 1 ]; then
     # 多GPU训练使用accelerate
     log "${GREEN}Using multi-GPU training with $NUM_GPUS GPUs${NC}"
-    accelerate launch --num_processes $NUM_GPUS --main_process_port 29999 --multi_gpu /tmp/train_dsa_config.py 2>&1 | tee -a "$LOG_FILE"
-    TRAINING_EXIT_CODE=${PIPESTATUS[0]}
-elif [ "$NUM_GPUS" -eq 1 ]; then
-    # 单GPU训练
-    log "${GREEN}Using single GPU training${NC}"
-    python /tmp/train_dsa_config.py 2>&1 | tee -a "$LOG_FILE"
+    # For accelerate, we need to pass the command as arguments, not as a string
+    bash -c "accelerate launch --num_processes $NUM_GPUS --main_process_port 29999 --multi_gpu $TRAIN_CMD" 2>&1 | tee -a "$LOG_FILE"
     TRAINING_EXIT_CODE=${PIPESTATUS[0]}
 else
-    # CPU训练
-    log "${YELLOW}Using CPU training${NC}"
-    python /tmp/train_dsa_config.py 2>&1 | tee -a "$LOG_FILE"
+    # 单GPU或CPU训练
+    if [ "$NUM_GPUS" -eq 1 ]; then
+        log "${GREEN}Using single GPU training${NC}"
+    else
+        log "${YELLOW}Using CPU training${NC}"
+    fi
+    # Use bash -c instead of eval to properly handle command arguments
+    bash -c "$TRAIN_CMD" 2>&1 | tee -a "$LOG_FILE"
     TRAINING_EXIT_CODE=${PIPESTATUS[0]}
 fi
 
@@ -372,9 +338,6 @@ else
     log "${RED}Please check the error messages in the log file: $LOG_FILE${NC}"
     exit 1
 fi
-
-# 清理临时文件
-rm -f /tmp/train_dsa_config.py
 
 log "${BLUE}Done.${NC}"
 log "========================================"
