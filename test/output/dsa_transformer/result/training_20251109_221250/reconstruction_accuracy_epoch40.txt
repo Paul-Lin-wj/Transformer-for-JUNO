@@ -1,0 +1,2 @@
+Angle 68% quantile: 9.986980438232422
+midpoints distance 68% quantile: 2832.012939453125

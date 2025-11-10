@@ -9,11 +9,11 @@
 # ==========================================
 
 # 训练基本配置
-NUM_EPOCHS=100                   # 训练轮数（减少用于测试）
-BATCH_SIZE=4                  # 批大小（减小以减少GPU内存使用）
+NUM_EPOCHS=200                   # 训练轮数（减少用于测试）
+BATCH_SIZE=16                  # 批大小（减小以减少GPU内存使用）
 LEARNING_RATE=0.001            # 学习率
-SAVE_EVERY=20                   # 每隔多少epoch保存模型
-RESUME_TRAINING=false          # 是否从上次训练继续 (true/false)
+SAVE_EVERY=20                    # 每隔多少epoch保存模型
+RESUME_TRAINING=true          # 是否从上次训练继续 (true/false)
 
 # 模型配置
 INPUT_DIM=5                    # 输入特征维度
@@ -34,7 +34,7 @@ ENTROPY_WEIGHT=0.0001          # 熵正则化权重
 # 数据配置
 # DATASET_PATH="/data/juno/lin/JUNO/transformer/muon_track_reco_transformer/sample/dataset"
 DATASET_PATH="/scratchfs/juno/fanliangqianjin/muonRec/TRANSFORMER_FOR_TTinput/muon_track_reco_transformer/sample/TTdataset_small/"
-MAX_FILES="100"                      # 最大加载文件数（可选，留空表示加载所有文件）
+MAX_FILES="1000"                      # 最大加载文件数（可选，留空表示加载所有文件）
 TRAIN_RATIO=0.8                # 训练集比例
 NORMALIZE=true                 # 是否归一化数据 (true/false)
 
@@ -45,8 +45,8 @@ EARLY_STOPPING_PATIENCE=30     # 早停耐心值
 MIN_DELTA=1e-6                 # 早停最小改善阈值
 
 # GPU配置
-NUM_GPUS=2                      # GPU数量，0表示CPU，>0表示使用GPU
-GPU_IDS="0,1"                     # 指定使用的GPU ID，例如"0,1,2,3"，留空则自动选择
+NUM_GPUS=1                      # GPU数量，0表示CPU，>0表示使用GPU
+GPU_IDS="1"                     # 指定使用的GPU ID，例如"0,1,2,3"，留空则自动选择
 
 # 系统配置
 NUM_WORKERS=16                  # 数据加载进程数
@@ -260,6 +260,7 @@ fi
 TRAIN_CMD="$TRAIN_CMD --num_epochs $NUM_EPOCHS"
 TRAIN_CMD="$TRAIN_CMD --batch_size $BATCH_SIZE"
 TRAIN_CMD="$TRAIN_CMD --learning_rate $LEARNING_RATE"
+TRAIN_CMD="$TRAIN_CMD --save_every $SAVE_EVERY"
 TRAIN_CMD="$TRAIN_CMD --embed_dim $EMBED_DIM"
 TRAIN_CMD="$TRAIN_CMD --num_heads $NUM_HEADS"
 TRAIN_CMD="$TRAIN_CMD --num_layers $NUM_LAYERS"
@@ -267,6 +268,7 @@ TRAIN_CMD="$TRAIN_CMD --hidden_dim $HIDDEN_DIM"
 TRAIN_CMD="$TRAIN_CMD --input_dim $INPUT_DIM"
 TRAIN_CMD="$TRAIN_CMD --test_size $TEST_SIZE"
 TRAIN_CMD="$TRAIN_CMD --GPUid \"$GPU_IDS\""
+TRAIN_CMD="$TRAIN_CMD --run_timestamp $TIMESTAMP"
 
 # 添加DSA参数
 if [ "$DSA_ENABLED" = true ]; then

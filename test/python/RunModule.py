@@ -149,6 +149,8 @@ if __name__ == "__main__":
     parser.add_argument("--learning_rate", type=float, default=1e-3)
     parser.add_argument("--scheduler_step", type=int, default=150)
     parser.add_argument("--batch_size", type=int, default=64)
+    parser.add_argument("--save_every", type=int, default=10, help="Save model every N epochs")
+    parser.add_argument("--run_timestamp", type=str, default=None, help="Run timestamp for creating unique output directory")
     parser.add_argument(
         "--pklfile_train_path",
         type=str,

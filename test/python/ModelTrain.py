@@ -39,16 +39,28 @@ class ModelTrain:
         self.scheduler_step = arguments["scheduler_step"]
         self.batch_size = arguments["batch_size"]
         self.GPUid = arguments["GPUid"]
+        self.save_every = arguments.get("save_every", 10)  # Default save every 10 epochs
         self.is_fine_tuning = arguments.get("ModelTuning", False)
         self.pretrained_model_path = arguments.get("pretrained_model_path", None)
 
+        # Get run timestamp if provided
+        run_timestamp = arguments.get("run_timestamp", None)
+
         if self.is_fine_tuning:
-            self.result_save_path = (
-                f"{self.output_path}/{self.mission_name}/tunning_results/result"
-            )
+            base_path = f"{self.output_path}/{self.mission_name}/tunning_results/result"
         else:
-            self.result_save_path = f"{self.output_path}/{self.mission_name}/result"
+            base_path = f"{self.output_path}/{self.mission_name}/result"
+
+        # Add timestamp subdirectory if provided
+        if run_timestamp:
+            self.result_save_path = f"{base_path}/training_{run_timestamp}"
+        else:
+            self.result_save_path = base_path
+
         result = subprocess.run(f"mkdir -p {self.result_save_path}", shell=True)
+
+        # Print model save directory
+        print(f"Model save directory: {self.result_save_path}", flush=True)
 
         # data load
         self.train_set_size = 0
@@ -278,9 +290,10 @@ class ModelTrain:
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
 
-            # ===== 每100 epoch保存模型和loss曲线，以及在验证集做性能分析 ======
-            if (epoch + 1) % 100 == 0 or (epoch == self.num_epochs - 1):
+            # ===== 每save_every epoch保存模型和loss曲线，以及在验证集做性能分析 ======
+            if (epoch + 1) % self.save_every == 0 or (epoch == self.num_epochs - 1):
                 if accelerator.is_main_process:
+                    accelerator.print(f"\n>>> Saving checkpoint at epoch {epoch+1} (save_every={self.save_every}) <<<\n")
                     # 保存loss曲线
                     plt.figure(figsize=(10, 5))
                     plt.plot(
